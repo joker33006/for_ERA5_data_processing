@@ -1,0 +1,89 @@
+---
+title: "Climatic data format and SPEI analysis"
+output: html_notebook
+---
+
+#overview 
+The climatic data and enhance vegetation index downloaded from Google earth engine were processed and analysed.
+
+#package
+```{r}
+library(SPEI)
+library(data.table)
+library(tidyverse)# for pipe
+library(stringr)
+```
+
+
+#step 1. data loading and formatting
+```{r}
+dt <- fread("rawdata/ERA5_monthly_Yushan_1950_2024_04_30.csv")
+dt <- dt[,`system:index`:=NULL][,.geo:=NULL]
+t_dt <- melt(dt, id.vars=c("plot_id"),variable.name = "var",value.name="value")
+t_dt[,year:=str_sub(var, start = 1, end = 4)][
+  ,month:=str_sub(var,5,6)][
+    ,var_name:=str_sub(var,8,str_count(var))
+  ]
+dt <- dcast(t_dt,year+month+plot_id~var_name,value.var = "value")
+
+setnames(dt,c("plot_id",
+              "potential_evaporation_sum",
+              "total_evaporation_sum",
+              "temperature_2m",
+              "total_precipitation_sum"),
+         c("plot_id","PE","TE","temp","precip"))
+dt[,c("PE","TE","temp","precip"):=.(PE*1000,TE*1000,temp-273.15,precip*1000)]
+dt[,D:=precip+PE][,RD:=precip+TE]
+```
+## 1.1 for grid data
+Due to we used the point to replace the grid data, we need to transform the point to grid. 
+```{r}
+dt <- fread("rawdata/ERA5_monthly_Yushan_1950_2024_04_30.csv")
+dt <- dt[,`system:index`:=NULL]
+dt[,coords:=str_extract(.geo,"\\d+\\.\\d+,\\d+\\.\\d+")]
+dt[,x:=str_extract(coords,"12\\d\\.\\d+")][,y:=str_extract(coords,"23\\.\\d+")]
+
+dt[, (c("x", "y")) := lapply(.SD,function(x)(round(as.numeric(x),1))),
+   .SDcols = c("x", "y")]
+dt[,c(".geo","coords"):=NULL]
+
+t_dt <- melt(dt, id.vars=c("plot_id","x","y"),variable.name = "var",value.name="value")
+t_dt[,year:=str_sub(var, start = 1, end = 4)][
+  ,month:=str_sub(var,5,6)][
+    ,var_name:=str_sub(var,8,str_count(var))
+  ]
+dt <- dcast(t_dt,year+month+plot_id+x+y~var_name,value.var = "value")
+
+setnames(dt,c("plot_id",
+              "potential_evaporation_sum",
+              "total_evaporation_sum",
+              "temperature_2m",
+              "total_precipitation_sum"),
+         c("plot_id","PE","TE","temp","precip"))
+dt[,c("PE","TE","temp","precip"):=.(PE*1000,TE*1000,temp-273.15,precip*1000)]
+dt[,D:=precip+PE][,RD:=precip+TE]
+```
+
+
+# step 2. Calculated SPEI
+```{r}
+
+for (i in unique(dt$plot_id)){
+  dt[plot_id==i,spei_3:=as.data.table(spei(D,3)$fitted)][
+    plot_id==i,spei_6:=as.data.table(spei(D,6)$fitted)][
+      plot_id==i,spei_12:=as.data.table(spei(D,12)$fitted)][
+      plot_id==i,spei_24:=as.data.table(spei(D,24)$fitted)]
+}
+for (i in unique(dt$plot_id)){
+  dt[plot_id==i,spei_3_RD:=as.data.table(spei(RD,3)$fitted)][
+    plot_id==i,spei_6_RD:=as.data.table(spei(RD,6)$fitted)][
+      plot_id==i,spei_12_RD:=as.data.table(spei(RD,12)$fitted)][
+      plot_id==i,spei_24_RD:=as.data.table(spei(RD,24)$fitted)]
+}
+
+
+dt[,date:=as.Date(paste(year,month,1,sep="-"))]
+dt[,year:=as.numeric(year)][,month:=as.numeric(month)]
+
+write.csv(dt,"result/spei_index_data_grid.csv")
+```
